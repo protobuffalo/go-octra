@@ -95,7 +95,19 @@ func printTxRow(t map[string]interface{}) {
 	amount := rpc.MapString(t, "amount_raw", "0")
 	opType := rpc.MapString(t, "op_type", "standard")
 	status := rpc.MapString(t, "status", "?")
-	fmt.Printf("  %s  %s -> %s  %s  [%s] %s\n", hash[:12]+"...", from[:11]+"...", to[:11]+"...", amount, opType, status)
+	hashStr := hash
+	if len(hash) > 12 {
+		hashStr = hash[:12] + "..."
+	}
+	fromStr := from
+	if len(from) > 11 {
+		fromStr = from[:11] + "..."
+	}
+	toStr := to
+	if len(to) > 11 {
+		toStr = to[:11] + "..."
+	}
+	fmt.Printf("  %s  %s -> %s  %s  [%s] %s\n", hashStr, fromStr, toStr, amount, opType, status)
 }
 
 func init() {
