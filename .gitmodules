@@ -1,0 +1,3 @@
+[submodule "webcli"]
+	path = webcli
+	url = https://github.com/octra-labs/webcli
