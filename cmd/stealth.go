@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -320,9 +321,10 @@ var stealthClaimCmd = &cobra.Command{
 			s.Pvac.FreeCipher(ctClaim)
 			s.Pvac.FreeZeroProof(zkp)
 
+			outIDInt, _ := strconv.Atoi(outID)
 			claimData := map[string]interface{}{
 				"version":      5,
-				"output_id":    outID,
+				"output_id":    outIDInt,
 				"claim_cipher": claimCipherStr,
 				"commitment":   commitB64,
 				"claim_secret": crypto.HexEncode(cs[:]),
