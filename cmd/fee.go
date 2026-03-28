@@ -2,74 +2,74 @@ package cmd
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
-
-	"github.com/spf13/cobra"
-
-	"github.com/protobuffalo/go-octra/internal/rpc"
 )
 
-var feeCmd = &cobra.Command{
-	Use:   "fee",
-	Short: "Show recommended fees",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
+func runFee(args []string) {
+	fs := flag.NewFlagSet("fee", flag.ExitOnError)
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
 
-		ops := []string{"standard", "encrypt", "decrypt", "stealth", "claim", "deploy", "call"}
-		fees := make(map[string]interface{})
-		for _, op := range ops {
-			r := s.RPC.RecommendedFee(op)
-			if r.OK {
-				fees[op] = r.Map()
-			} else {
-				fees[op] = map[string]interface{}{
-					"minimum":     "1000",
-					"recommended": "1000",
-					"fast":        "2000",
-				}
+	s := mustSession(*account)
+	defer s.Close()
+
+	ops := []string{"standard", "encrypt", "decrypt", "stealth", "claim", "deploy", "call"}
+	fees := make(map[string]interface{})
+	for _, op := range ops {
+		resp, err := s.RPC.RecommendedFee(op)
+		if err == nil {
+			fees[op] = map[string]interface{}{
+				"minimum":     resp.Minimum,
+				"recommended": resp.Recommended,
+				"fast":        resp.Fast,
+			}
+		} else {
+			fees[op] = map[string]interface{}{
+				"minimum":     "1000",
+				"recommended": "1000",
+				"fast":        "2000",
 			}
 		}
-		j, _ := json.MarshalIndent(fees, "", "  ")
-		fmt.Println(string(j))
-	},
+	}
+	j, _ := json.MarshalIndent(fees, "", "  ")
+	fmt.Println(string(j))
 }
 
-var txCmd = &cobra.Command{
-	Use:   "tx [hash]",
-	Short: "Get transaction details",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
+func runTx(args []string) {
+	fs := flag.NewFlagSet("tx", flag.ExitOnError)
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
 
-		r := s.RPC.GetTransaction(args[0])
-		if !r.OK {
-			fmt.Printf("Error: transaction not found\n")
-			return
-		}
-		m := r.Map()
-		result := map[string]interface{}{
-			"hash":       rpc.MapString(m, "tx_hash", args[0]),
-			"from":       rpc.MapString(m, "from", ""),
-			"to_":        rpc.MapString(m, "to", rpc.MapString(m, "to_", "")),
-			"amount_raw": rpc.MapString(m, "amount_raw", rpc.MapString(m, "amount", "0")),
-			"op_type":    rpc.MapString(m, "op_type", "standard"),
-			"status":     rpc.MapString(m, "status", "pending"),
-			"nonce":      rpc.MapInt(m, "nonce", 0),
-		}
-		if v := rpc.MapFloat(m, "timestamp", 0); v != 0 {
-			result["timestamp"] = v
-		}
-		if v := rpc.MapString(m, "message", ""); v != "" {
-			result["message"] = v
-		}
-		j, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Println(string(j))
-	},
-}
+	if fs.NArg() != 1 {
+		fmt.Println("Usage: octra tx <hash>")
+		return
+	}
+	hash := fs.Arg(0)
 
-func init() {
-	feeCmd.Flags().String("account", "", "Account address")
-	txCmd.Flags().String("account", "", "Account address")
+	s := mustSession(*account)
+	defer s.Close()
+
+	resp, err := s.RPC.GetTransaction(hash)
+	if err != nil {
+		fmt.Printf("Error: transaction not found\n")
+		return
+	}
+	result := map[string]interface{}{
+		"hash":       resp.EffectiveHash(),
+		"from":       resp.From,
+		"to_":        resp.Recipient(),
+		"amount_raw": resp.EffectiveAmountRaw(),
+		"op_type":    resp.OpType,
+		"status":     resp.Status,
+		"nonce":      resp.Nonce,
+	}
+	if resp.Timestamp != 0 {
+		result["timestamp"] = resp.Timestamp
+	}
+	if msg := resp.MessageStr(); msg != "" {
+		result["message"] = msg
+	}
+	j, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(j))
 }

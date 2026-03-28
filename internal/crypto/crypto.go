@@ -9,10 +9,10 @@ import (
 	"crypto/sha512"
 	"errors"
 	"fmt"
+	"hash"
 	"strings"
 
 	"github.com/protobuffalo/go-octra/internal/nacl"
-	"golang.org/x/crypto/pbkdf2"
 )
 
 func SHA256(data []byte) [32]byte {
@@ -32,8 +32,39 @@ func HMACSHA512(key, data []byte) [64]byte {
 	return out
 }
 
+func pbkdf2Key(password, salt []byte, iter, keyLen int, h func() hash.Hash) []byte {
+	prf := hmac.New(h, password)
+	hLen := prf.Size()
+	numBlocks := (keyLen + hLen - 1) / hLen
+	dk := make([]byte, 0, numBlocks*hLen)
+	buf := make([]byte, 4)
+	u := make([]byte, hLen)
+	result := make([]byte, hLen)
+	for block := 1; block <= numBlocks; block++ {
+		buf[0] = byte(block >> 24)
+		buf[1] = byte(block >> 16)
+		buf[2] = byte(block >> 8)
+		buf[3] = byte(block)
+		prf.Reset()
+		prf.Write(salt)
+		prf.Write(buf)
+		u = prf.Sum(u[:0])
+		copy(result, u)
+		for i := 1; i < iter; i++ {
+			prf.Reset()
+			prf.Write(u)
+			u = prf.Sum(u[:0])
+			for j := range result {
+				result[j] ^= u[j]
+			}
+		}
+		dk = append(dk, result...)
+	}
+	return dk[:keyLen]
+}
+
 func DeriveKeyFromPin(pin string, salt []byte, iterations int) [32]byte {
-	key := pbkdf2.Key([]byte(pin), salt, iterations, 32, sha256.New)
+	key := pbkdf2Key([]byte(pin), salt, iterations, 32, sha256.New)
 	var out [32]byte
 	copy(out[:], key)
 	return out
@@ -209,7 +240,7 @@ func DeriveHDSeed(masterSeed []byte, index uint32, hdVersion int) [32]byte {
 
 func MnemonicToSeed(mnemonic string) [64]byte {
 	salt := "mnemonic"
-	key := pbkdf2.Key([]byte(mnemonic), []byte(salt), 2048, 64, sha512.New)
+	key := pbkdf2Key([]byte(mnemonic), []byte(salt), 2048, 64, sha512.New)
 	var out [64]byte
 	copy(out[:], key)
 	return out

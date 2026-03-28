@@ -2,7 +2,7 @@ package rpc
 
 import (
 	"bytes"
-	"crypto/tls"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,24 +12,18 @@ import (
 )
 
 type Result struct {
-	OK     bool
-	Data   json.RawMessage
-	Error  string
+	OK    bool
+	Data  json.RawMessage
+	Error string
 }
 
 func (r *Result) Unmarshal(v interface{}) error {
 	return json.Unmarshal(r.Data, v)
 }
 
-func (r *Result) Map() map[string]interface{} {
-	var m map[string]interface{}
-	json.Unmarshal(r.Data, &m)
-	return m
-}
-
 type Client struct {
-	url string
-	id  atomic.Int64
+	url  string
+	id   atomic.Int64
 	http *http.Client
 }
 
@@ -37,9 +31,12 @@ func NewClient(url string) *Client {
 	return &Client{
 		url: url,
 		http: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				MaxIdleConns:        10,
+				IdleConnTimeout:     90 * time.Second,
+				DisableKeepAlives:   false,
+				MaxIdleConnsPerHost: 5,
 			},
 		},
 	}
@@ -70,22 +67,23 @@ func (c *Client) Call(method string, params interface{}, timeoutSec ...int) *Res
 		timeout = time.Duration(timeoutSec[0]) * time.Second
 	}
 
-	client := &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
 	url := c.url
-	if url[len(url)-1] != '/' {
-		// ensure /rpc path if not present
+	if len(url) > 0 && url[len(url)-1] != '/' {
 		if len(url) < 4 || url[len(url)-4:] != "/rpc" {
 			url += "/rpc"
 		}
 	}
 
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return &Result{OK: false, Error: "request error: " + err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return &Result{OK: false, Error: "connection failed: " + err.Error()}
 	}
@@ -127,135 +125,220 @@ func (c *Client) Call(method string, params interface{}, timeoutSec ...int) *Res
 	return &Result{OK: false, Error: "unknown rpc response"}
 }
 
-// Convenience methods
+// --- Typed RPC methods ---
 
-func (c *Client) GetBalance(addr string) *Result {
-	return c.Call("octra_balance", []interface{}{addr})
+func (c *Client) GetBalance(addr string) (*BalanceResponse, error) {
+	r := c.Call("octra_balance", []interface{}{addr})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp BalanceResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) GetAccount(addr string, limit int) *Result {
-	return c.Call("octra_account", []interface{}{addr, limit})
+func (c *Client) GetTransaction(hash string) (*TransactionResponse, error) {
+	r := c.Call("octra_transaction", []interface{}{hash})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp TransactionResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) GetTransaction(hash string) *Result {
-	return c.Call("octra_transaction", []interface{}{hash})
+func (c *Client) SubmitTx(tx map[string]interface{}) (*SubmitResponse, error) {
+	r := c.Call("octra_submit", []interface{}{tx})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp SubmitResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) SubmitTx(tx map[string]interface{}) *Result {
-	return c.Call("octra_submit", []interface{}{tx})
+func (c *Client) GetViewPubkey(addr string) (*ViewPubkeyResponse, error) {
+	r := c.Call("octra_viewPubkey", []interface{}{addr})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp ViewPubkeyResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) GetViewPubkey(addr string) *Result {
-	return c.Call("octra_viewPubkey", []interface{}{addr})
+func (c *Client) GetEncryptedBalance(addr, sigB64, pubB64 string) (*EncryptedBalanceResponse, error) {
+	r := c.Call("octra_encryptedBalance", []interface{}{addr, sigB64, pubB64})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp EncryptedBalanceResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) GetEncryptedBalance(addr, sigB64, pubB64 string) *Result {
-	return c.Call("octra_encryptedBalance", []interface{}{addr, sigB64, pubB64})
+func (c *Client) RegisterPvacPubkey(addr, pkB64, sigB64, pubB64, aesKatHex string) error {
+	r := c.Call("octra_registerPvacPubkey", []interface{}{addr, pkB64, sigB64, pubB64, aesKatHex})
+	if !r.OK {
+		return fmt.Errorf("%s", r.Error)
+	}
+	return nil
 }
 
-func (c *Client) GetEncryptedCipher(addr string) *Result {
-	return c.Call("octra_encryptedCipher", []interface{}{addr})
+func (c *Client) GetPvacPubkey(addr string) (*PvacPubkeyResponse, error) {
+	r := c.Call("octra_pvacPubkey", []interface{}{addr})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp PvacPubkeyResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) RegisterPvacPubkey(addr, pkB64, sigB64, pubB64, aesKatHex string) *Result {
-	return c.Call("octra_registerPvacPubkey", []interface{}{addr, pkB64, sigB64, pubB64, aesKatHex})
+func (c *Client) RegisterPublicKey(addr, pubB64, sigB64 string) error {
+	r := c.Call("octra_registerPublicKey", []interface{}{addr, pubB64, sigB64})
+	if !r.OK {
+		return fmt.Errorf("%s", r.Error)
+	}
+	return nil
 }
 
-func (c *Client) GetPvacPubkey(addr string) *Result {
-	return c.Call("octra_pvacPubkey", []interface{}{addr})
+func (c *Client) GetStealthOutputs(fromEpoch int) (*StealthOutputsResponse, error) {
+	r := c.Call("octra_stealthOutputs", []interface{}{fromEpoch})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp StealthOutputsResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) RegisterPublicKey(addr, pubB64, sigB64 string) *Result {
-	return c.Call("octra_registerPublicKey", []interface{}{addr, pubB64, sigB64})
+func (c *Client) StagingView() (*StagingResponse, error) {
+	r := c.Call("staging_view", []interface{}{}, 5)
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp StagingResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) GetStealthOutputs(fromEpoch int) *Result {
-	return c.Call("octra_stealthOutputs", []interface{}{fromEpoch})
+func (c *Client) CompileAssembly(source string) (*CompileResponse, error) {
+	r := c.Call("octra_compileAssembly", []interface{}{source}, 10)
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp CompileResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) StagingView() *Result {
-	return c.Call("staging_view", []interface{}{}, 5)
+func (c *Client) CompileAml(source string) (*CompileAmlResponse, error) {
+	r := c.Call("octra_compileAml", []interface{}{source}, 10)
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp CompileAmlResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) CompileAssembly(source string) *Result {
-	return c.Call("octra_compileAssembly", []interface{}{source}, 10)
+func (c *Client) ComputeContractAddress(bytecodeB64, deployer string, nonce int) (*ContractAddressResponse, error) {
+	r := c.Call("octra_computeContractAddress", []interface{}{bytecodeB64, deployer, nonce})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp ContractAddressResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) CompileAml(source string) *Result {
-	return c.Call("octra_compileAml", []interface{}{source}, 10)
-}
-
-func (c *Client) ComputeContractAddress(bytecodeB64, deployer string, nonce int) *Result {
-	return c.Call("octra_computeContractAddress", []interface{}{bytecodeB64, deployer, nonce})
-}
-
+// VMContract returns raw JSON (pass-through).
 func (c *Client) VMContract(addr string) *Result {
 	return c.Call("vm_contract", []interface{}{addr})
 }
 
+// ContractReceipt returns raw JSON (pass-through).
 func (c *Client) ContractReceipt(hash string) *Result {
 	return c.Call("contract_receipt", []interface{}{hash})
 }
 
+// ContractCallView returns raw JSON (response shape varies by contract).
 func (c *Client) ContractCallView(addr, method string, params interface{}, caller string) *Result {
 	return c.Call("contract_call", []interface{}{addr, method, params, caller}, 15)
 }
 
-func (c *Client) ListContracts() *Result {
-	return c.Call("octra_listContracts", []interface{}{}, 10)
+func (c *Client) ListContracts() (*ListContractsResponse, error) {
+	r := c.Call("octra_listContracts", []interface{}{}, 10)
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp ListContractsResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) ContractStorage(addr, key string) *Result {
-	return c.Call("octra_contractStorage", []interface{}{addr, key})
+func (c *Client) ContractStorage(addr, key string) (*StorageResponse, error) {
+	r := c.Call("octra_contractStorage", []interface{}{addr, key})
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp StorageResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) ContractAbi(addr string) *Result {
-	return c.Call("octra_contractAbi", []interface{}{addr})
+func (c *Client) GetTxsByAddress(addr string, limit, offset int) (*TxsByAddressResponse, error) {
+	r := c.Call("octra_transactionsByAddress", []interface{}{addr, limit, offset}, 15)
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp TxsByAddressResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) SaveAbi(addr, abi string) *Result {
-	return c.Call("contract_saveAbi", []interface{}{addr, abi})
+func (c *Client) RecommendedFee(opType string) (*FeeResponse, error) {
+	r := c.Call("octra_recommendedFee", []interface{}{opType}, 5)
+	if !r.OK {
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	var resp FeeResponse
+	if err := r.Unmarshal(&resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-func (c *Client) GetTxsByAddress(addr string, limit, offset int) *Result {
-	return c.Call("octra_transactionsByAddress", []interface{}{addr, limit, offset}, 15)
-}
-
-func (c *Client) RecommendedFee(opType string) *Result {
-	return c.Call("octra_recommendedFee", []interface{}{opType}, 5)
-}
-
+// ContractVerify returns raw JSON (pass-through).
 func (c *Client) ContractVerify(addr, source string) *Result {
 	return c.Call("contract_verify", []interface{}{addr, source}, 15)
-}
-
-func MapString(m map[string]interface{}, key, def string) string {
-	if v, ok := m[key]; ok && v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-		return fmt.Sprintf("%v", v)
-	}
-	return def
-}
-
-func MapInt(m map[string]interface{}, key string, def int) int {
-	if v, ok := m[key]; ok {
-		switch n := v.(type) {
-		case float64:
-			return int(n)
-		case int:
-			return n
-		}
-	}
-	return def
-}
-
-func MapFloat(m map[string]interface{}, key string, def float64) float64 {
-	if v, ok := m[key]; ok {
-		if n, ok := v.(float64); ok {
-			return n
-		}
-	}
-	return def
 }

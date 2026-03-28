@@ -16,7 +16,8 @@ import (
 )
 
 // Handle is an opaque reference to a PVAC object (cipher, proof, etc.)
-type Handle uintptr
+// Stored as unsafe.Pointer to satisfy go vet and keep GC-visibility.
+type Handle unsafe.Pointer
 
 type Bridge struct {
 	pk C.pvac_pubkey
@@ -71,12 +72,12 @@ func (b *Bridge) GetBalance(cipherStr string) int64 {
 func (b *Bridge) Encrypt(value uint64, seed [32]byte) Handle {
 	ct := C.pvac_enc_value_seeded(b.pk, b.sk, C.uint64_t(value),
 		(*C.uint8_t)(unsafe.Pointer(&seed[0])))
-	return Handle(uintptr(ct))
+	return Handle(ct)
 }
 
 func (b *Bridge) CTSub(a, bh Handle) Handle {
 	ct := C.pvac_ct_sub(b.pk, toC(a), toC(bh))
-	return Handle(uintptr(ct))
+	return Handle(ct)
 }
 
 func (b *Bridge) CommitCT(ct Handle) [32]byte {
@@ -87,7 +88,7 @@ func (b *Bridge) CommitCT(ct Handle) [32]byte {
 
 func (b *Bridge) DecodeCipher(s string) Handle {
 	ct := b.decodeCipherC(s)
-	return Handle(uintptr(ct))
+	return Handle(ct)
 }
 
 func (b *Bridge) EncodeCipher(ct Handle) string {
@@ -103,10 +104,10 @@ func (b *Bridge) SerializeCipherB64(ct Handle) string {
 func (b *Bridge) DeserializeCipherFromB64(b64 string) Handle {
 	raw, err := crypto.Base64Decode(b64)
 	if err != nil || len(raw) == 0 {
-		return 0
+		return nil
 	}
 	ct := C.pvac_deserialize_cipher((*C.uint8_t)(unsafe.Pointer(&raw[0])), C.size_t(len(raw)))
-	return Handle(uintptr(ct))
+	return Handle(ct)
 }
 
 func (b *Bridge) PedersenCommit(amount uint64, blinding [32]byte) [32]byte {
@@ -120,17 +121,17 @@ func (b *Bridge) PedersenCommit(amount uint64, blinding [32]byte) [32]byte {
 func (b *Bridge) MakeZeroProofBound(ct Handle, amount uint64, blinding [32]byte) Handle {
 	zp := C.pvac_make_zero_proof_bound(b.pk, b.sk, toC(ct),
 		C.uint64_t(amount), (*C.uint8_t)(unsafe.Pointer(&blinding[0])))
-	return Handle(uintptr(zp))
+	return Handle(zp)
 }
 
 func (b *Bridge) MakeRangeProof(ct Handle, value uint64) Handle {
 	rp := C.pvac_make_range_proof(b.pk, b.sk, toC(ct), C.uint64_t(value))
-	return Handle(uintptr(rp))
+	return Handle(rp)
 }
 
 func (b *Bridge) MakeAggRangeProof(ct Handle, value uint64) Handle {
 	arp := C.pvac_make_aggregated_range_proof(b.pk, b.sk, toC(ct), C.uint64_t(value))
-	return Handle(uintptr(arp))
+	return Handle(arp)
 }
 
 func (b *Bridge) EncodeRangeProof(rp Handle) string {
@@ -192,45 +193,45 @@ func (b *Bridge) AESKatHex() string {
 }
 
 func (b *Bridge) FreeCipher(ct Handle) {
-	if ct != 0 {
+	if ct != nil {
 		C.pvac_free_cipher(toC(ct))
 	}
 }
 
 func (b *Bridge) FreeRangeProof(rp Handle) {
-	if rp != 0 {
+	if rp != nil {
 		C.pvac_free_range_proof(toRP(rp))
 	}
 }
 
 func (b *Bridge) FreeZeroProof(zp Handle) {
-	if zp != 0 {
+	if zp != nil {
 		C.pvac_free_zero_proof(toZP(zp))
 	}
 }
 
 func (b *Bridge) FreeAggRangeProof(arp Handle) {
-	if arp != 0 {
+	if arp != nil {
 		C.pvac_free_agg_range_proof(toARP(arp))
 	}
 }
 
-// internal helpers
+// internal helpers — direct pointer casts, no uintptr round-trip.
 
 func toC(h Handle) C.pvac_cipher {
-	return C.pvac_cipher(unsafe.Pointer(uintptr(h)))
+	return C.pvac_cipher(h)
 }
 
 func toRP(h Handle) C.pvac_range_proof {
-	return C.pvac_range_proof(unsafe.Pointer(uintptr(h)))
+	return C.pvac_range_proof(h)
 }
 
 func toZP(h Handle) C.pvac_zero_proof {
-	return C.pvac_zero_proof(unsafe.Pointer(uintptr(h)))
+	return C.pvac_zero_proof(h)
 }
 
 func toARP(h Handle) C.pvac_agg_range_proof {
-	return C.pvac_agg_range_proof(unsafe.Pointer(uintptr(h)))
+	return C.pvac_agg_range_proof(h)
 }
 
 func (b *Bridge) decodeCipherC(s string) C.pvac_cipher {

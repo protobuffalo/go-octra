@@ -1,100 +1,90 @@
 package cmd
 
 import (
+	"flag"
 	"fmt"
-
-	"github.com/spf13/cobra"
 
 	"github.com/protobuffalo/go-octra/internal/rpc"
 )
 
-var historyCmd = &cobra.Command{
-	Use:   "history",
-	Short: "Show transaction history",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
+func runHistory(args []string) {
+	fs := flag.NewFlagSet("history", flag.ExitOnError)
+	limit := fs.Int("limit", 20, "Number of transactions")
+	offset := fs.Int("offset", 0, "Offset")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
 
-		limit, _ := cmd.Flags().GetInt("limit")
-		offset, _ := cmd.Flags().GetInt("offset")
+	s := mustSession(*account)
+	defer s.Close()
 
-		convertRow := func(row map[string]interface{}, status string) map[string]interface{} {
-			return map[string]interface{}{
-				"hash":       rpc.MapString(row, "hash", ""),
-				"from":       rpc.MapString(row, "from", ""),
-				"to_":        rpc.MapString(row, "to", rpc.MapString(row, "to_", "")),
-				"amount_raw": rpc.MapString(row, "amount", rpc.MapString(row, "amount_raw", "0")),
-				"op_type":    rpc.MapString(row, "op_type", "standard"),
-				"status":     status,
-			}
+	convertRow := func(row rpc.TxRow, status string) map[string]interface{} {
+		return map[string]interface{}{
+			"hash":       row.Hash,
+			"from":       row.From,
+			"to_":        row.Recipient(),
+			"amount_raw": row.EffectiveAmountRaw(),
+			"op_type":    row.OpType,
+			"status":     status,
+			"timestamp":  row.Timestamp,
 		}
+	}
 
-		if s.Cache.IsOpen() {
-			r := s.RPC.GetTxsByAddress(s.Wallet.Addr, 1, 0)
-			nodeTotal := 0
-			if r.OK {
-				m := r.Map()
-				nodeTotal = rpc.MapInt(m, "total", 0)
-			}
-			cached := s.Cache.GetTotal(s.Wallet.Addr)
-			if nodeTotal > cached {
-				delta := nodeTotal - cached
-				dr := s.RPC.GetTxsByAddress(s.Wallet.Addr, delta, 0)
-				if dr.OK {
-					m := dr.Map()
-					if txsRaw, ok := m["transactions"].([]interface{}); ok {
-						var toStore []map[string]interface{}
-						for _, raw := range txsRaw {
-							row, ok := raw.(map[string]interface{})
-							if !ok {
-								continue
-							}
-							h := rpc.MapString(row, "hash", "")
-							if h != "" && !s.Cache.HasTx(h) {
-								toStore = append(toStore, convertRow(row, "confirmed"))
-							}
-						}
-						if len(toStore) > 0 {
-							s.Cache.StoreTxs(toStore)
-							s.Cache.SetTotal(s.Wallet.Addr, cached+len(toStore))
-						}
+	if s.Cache.IsOpen() {
+		resp, err := s.RPC.GetTxsByAddress(s.Wallet.Addr, 1, 0)
+		nodeTotal := 0
+		if err == nil {
+			nodeTotal = resp.Total
+		}
+		cached := s.Cache.GetTotal(s.Wallet.Addr)
+		if nodeTotal > cached {
+			delta := nodeTotal - cached
+			dr, err := s.RPC.GetTxsByAddress(s.Wallet.Addr, delta, 0)
+			if err == nil {
+				var toStore []map[string]interface{}
+				for _, row := range dr.Transactions {
+					if row.Hash != "" && !s.Cache.HasTx(row.Hash) {
+						toStore = append(toStore, convertRow(row, "confirmed"))
 					}
 				}
-			}
-			cachedTxs := s.Cache.LoadPage(limit, offset)
-			for _, t := range cachedTxs {
-				printTxRow(t)
-			}
-		} else {
-			r := s.RPC.GetTxsByAddress(s.Wallet.Addr, limit, offset)
-			if r.OK {
-				m := r.Map()
-				if txsRaw, ok := m["transactions"].([]interface{}); ok {
-					for _, raw := range txsRaw {
-						if row, ok := raw.(map[string]interface{}); ok {
-							printTxRow(convertRow(row, "confirmed"))
-						}
-					}
-				}
-				if txsRaw, ok := m["rejected"].([]interface{}); ok {
-					for _, raw := range txsRaw {
-						if row, ok := raw.(map[string]interface{}); ok {
-							printTxRow(convertRow(row, "rejected"))
-						}
-					}
+				if len(toStore) > 0 {
+					s.Cache.StoreTxs(toStore)
+					s.Cache.SetTotal(s.Wallet.Addr, cached+len(toStore))
 				}
 			}
 		}
-	},
+		cachedTxs := s.Cache.LoadPage(*limit, *offset)
+		for _, t := range cachedTxs {
+			printTxRow(t)
+		}
+	} else {
+		resp, err := s.RPC.GetTxsByAddress(s.Wallet.Addr, *limit, *offset)
+		if err == nil {
+			for _, row := range resp.Transactions {
+				printTxRow(convertRow(row, "confirmed"))
+			}
+			for _, row := range resp.Rejected {
+				printTxRow(convertRow(row, "rejected"))
+			}
+		}
+	}
 }
 
 func printTxRow(t map[string]interface{}) {
-	hash := rpc.MapString(t, "hash", "?")
-	from := rpc.MapString(t, "from", "?")
-	to := rpc.MapString(t, "to_", "?")
-	amount := rpc.MapString(t, "amount_raw", "0")
-	opType := rpc.MapString(t, "op_type", "standard")
-	status := rpc.MapString(t, "status", "?")
+	str := func(key string) string {
+		if v, ok := t[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		return "?"
+	}
+	hash := str("hash")
+	from := str("from")
+	to := str("to_")
+	amount := str("amount_raw")
+	opType := str("op_type")
+	status := str("status")
 	hashStr := hash
 	if len(hash) > 12 {
 		hashStr = hash[:12] + "..."
@@ -108,10 +98,4 @@ func printTxRow(t map[string]interface{}) {
 		toStr = to[:11] + "..."
 	}
 	fmt.Printf("  %s  %s -> %s  %s  [%s] %s\n", hashStr, fromStr, toStr, amount, opType, status)
-}
-
-func init() {
-	historyCmd.Flags().Int("limit", 20, "Number of transactions")
-	historyCmd.Flags().Int("offset", 0, "Offset")
-	historyCmd.Flags().String("account", "", "Account address")
 }

@@ -2,423 +2,402 @@ package cmd
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
-	"strconv"
 
-	"github.com/spf13/cobra"
-
-	"github.com/protobuffalo/go-octra/internal/rpc"
 	octx "github.com/protobuffalo/go-octra/internal/tx"
 )
 
-var contractCmd = &cobra.Command{
-	Use:   "contract",
-	Short: "Smart contract commands",
+func dispatchContract(args []string) {
+	if len(args) == 0 {
+		printContractHelp()
+		return
+	}
+	switch args[0] {
+	case "compile":
+		runContractCompile(args[1:])
+	case "compile-aml":
+		runContractCompileAml(args[1:])
+	case "address":
+		runContractAddress(args[1:])
+	case "deploy":
+		runContractDeploy(args[1:])
+	case "verify":
+		runContractVerify(args[1:])
+	case "call":
+		runContractCall(args[1:])
+	case "view":
+		runContractView(args[1:])
+	case "info":
+		runContractInfo(args[1:])
+	case "receipt":
+		runContractReceipt(args[1:])
+	case "storage":
+		runContractStorage(args[1:])
+	case "help", "--help", "-h":
+		printContractHelp()
+	default:
+		fmt.Printf("Unknown contract command: %s\n", args[0])
+		printContractHelp()
+	}
 }
 
-var contractCompileCmd = &cobra.Command{
-	Use:   "compile",
-	Short: "Compile assembly bytecode",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		source, _ := cmd.Flags().GetString("source")
-		file, _ := cmd.Flags().GetString("file")
-		if source == "" && file != "" {
-			data, err := os.ReadFile(file)
-			if err != nil {
-				fmt.Printf("Error reading file: %s\n", err)
-				return
-			}
-			source = string(data)
-		}
-		if source == "" {
-			fmt.Println("Error: --source or --file required")
-			return
-		}
-
-		r := s.RPC.CompileAssembly(source)
-		if !r.OK {
-			fmt.Printf("Error: %s\n", r.Error)
-			return
-		}
-		m := r.Map()
-		j, _ := json.MarshalIndent(map[string]interface{}{
-			"bytecode":     rpc.MapString(m, "bytecode", ""),
-			"size":         rpc.MapInt(m, "size", 0),
-			"instructions": rpc.MapInt(m, "instructions", 0),
-		}, "", "  ")
-		fmt.Println(string(j))
-	},
+func printContractHelp() {
+	fmt.Println("Smart contract commands")
+	fmt.Println()
+	fmt.Println("Usage: octra contract <subcommand> [flags]")
+	fmt.Println()
+	fmt.Println("Subcommands:")
+	fmt.Println("  compile      Compile assembly bytecode")
+	fmt.Println("  compile-aml  Compile AML source code")
+	fmt.Println("  address      Compute contract address")
+	fmt.Println("  deploy       Deploy a smart contract")
+	fmt.Println("  verify       Verify contract source")
+	fmt.Println("  call         Call a contract method (state-changing)")
+	fmt.Println("  view         Call a contract method (read-only)")
+	fmt.Println("  info         Get contract info")
+	fmt.Println("  receipt      Get contract execution receipt")
+	fmt.Println("  storage      Read contract storage by key")
 }
 
-var contractCompileAmlCmd = &cobra.Command{
-	Use:   "compile-aml",
-	Short: "Compile AML source code",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
+func runContractCompile(args []string) {
+	fs := flag.NewFlagSet("contract compile", flag.ExitOnError)
+	source := fs.String("source", "", "Assembly source")
+	file := fs.String("file", "", "Source file path")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
 
-		source, _ := cmd.Flags().GetString("source")
-		file, _ := cmd.Flags().GetString("file")
-		if source == "" && file != "" {
-			data, err := os.ReadFile(file)
-			if err != nil {
-				fmt.Printf("Error reading file: %s\n", err)
-				return
-			}
-			source = string(data)
-		}
-		if source == "" {
-			fmt.Println("Error: --source or --file required")
-			return
-		}
+	s := mustSession(*account)
+	defer s.Close()
 
-		r := s.RPC.CompileAml(source)
-		if !r.OK {
-			fmt.Printf("Error: %s\n", r.Error)
-			return
-		}
-		m := r.Map()
-		result := map[string]interface{}{
-			"bytecode":     rpc.MapString(m, "bytecode", ""),
-			"size":         rpc.MapInt(m, "size", 0),
-			"instructions": rpc.MapInt(m, "instructions", 0),
-			"version":      rpc.MapString(m, "version", ""),
-		}
-		if abi, ok := m["abi"]; ok {
-			result["abi"] = abi
-		}
-		j, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Println(string(j))
-	},
-}
-
-var contractAddressCmd = &cobra.Command{
-	Use:   "address",
-	Short: "Compute contract address",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		bytecode, _ := cmd.Flags().GetString("bytecode")
-		if bytecode == "" {
-			fmt.Println("Error: --bytecode required")
-			return
-		}
-
-		bi := octx.GetNonceBalance(s.RPC, s.Wallet)
-		r := s.RPC.ComputeContractAddress(bytecode, s.Wallet.Addr, bi.Nonce+1)
-		if !r.OK {
-			fmt.Printf("Error: %s\n", r.Error)
-			return
-		}
-		m := r.Map()
-		j, _ := json.MarshalIndent(map[string]interface{}{
-			"address":  rpc.MapString(m, "address", ""),
-			"deployer": rpc.MapString(m, "deployer", ""),
-			"nonce":    rpc.MapInt(m, "nonce", 0),
-		}, "", "  ")
-		fmt.Println(string(j))
-	},
-}
-
-var contractDeployCmd = &cobra.Command{
-	Use:   "deploy",
-	Short: "Deploy a smart contract",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		bytecode, _ := cmd.Flags().GetString("bytecode")
-		params, _ := cmd.Flags().GetString("params")
-		ou, _ := cmd.Flags().GetString("ou")
-		if bytecode == "" {
-			fmt.Println("Error: --bytecode required")
-			return
-		}
-		if ou == "" {
-			ou = "50000000"
-		}
-
-		bi := octx.GetNonceBalance(s.RPC, s.Wallet)
-		ar := s.RPC.ComputeContractAddress(bytecode, s.Wallet.Addr, bi.Nonce+1)
-		if !ar.OK {
-			fmt.Printf("Error: %s\n", ar.Error)
-			return
-		}
-		m := ar.Map()
-		contractAddr := rpc.MapString(m, "address", "")
-
-		tx := &octx.Transaction{
-			From:          s.Wallet.Addr,
-			To:            contractAddr,
-			Amount:        "0",
-			Nonce:         bi.Nonce + 1,
-			OU:            ou,
-			Timestamp:     octx.NowTS(),
-			OpType:        "deploy",
-			EncryptedData: bytecode,
-			Message:       params,
-		}
-		octx.SignTx(tx, s.Wallet.SK, s.Wallet.PubB64)
-		txHash, err := octx.SubmitTx(s.RPC, tx)
+	if *source == "" && *file != "" {
+		data, err := os.ReadFile(*file)
 		if err != nil {
-			fmt.Printf("Error: %s\n", err)
+			fmt.Printf("Error reading file: %s\n", err)
 			return
 		}
-		fmt.Printf("Contract deployed: %s\n", contractAddr)
-		fmt.Printf("Transaction: %s\n", txHash)
-	},
-}
-
-var contractVerifyCmd = &cobra.Command{
-	Use:   "verify",
-	Short: "Verify contract source",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		addr, _ := cmd.Flags().GetString("address")
-		source, _ := cmd.Flags().GetString("source")
-		file, _ := cmd.Flags().GetString("file")
-		if source == "" && file != "" {
-			data, err := os.ReadFile(file)
-			if err != nil {
-				fmt.Printf("Error: %s\n", err)
-				return
-			}
-			source = string(data)
-		}
-		if addr == "" || source == "" {
-			fmt.Println("Error: --address and (--source or --file) required")
-			return
-		}
-
-		r := s.RPC.ContractVerify(addr, source)
-		if !r.OK {
-			fmt.Printf("Verification failed: %s\n", r.Error)
-			return
-		}
-		fmt.Println("Verification passed")
-		var raw json.RawMessage
-		r.Unmarshal(&raw)
-		fmt.Println(string(raw))
-	},
-}
-
-var contractCallCmd = &cobra.Command{
-	Use:   "call",
-	Short: "Call a contract method (state-changing)",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		addr, _ := cmd.Flags().GetString("address")
-		method, _ := cmd.Flags().GetString("method")
-		params, _ := cmd.Flags().GetString("params")
-		amount, _ := cmd.Flags().GetString("amount")
-		ou, _ := cmd.Flags().GetString("ou")
-
-		if addr == "" || method == "" {
-			fmt.Println("Error: --address and --method required")
-			return
-		}
-		if amount == "" {
-			amount = "0"
-		}
-		if ou == "" {
-			ou = "1000"
-		}
-		if params == "" {
-			params = "[]"
-		}
-
-		bi := octx.GetNonceBalance(s.RPC, s.Wallet)
-		tx := &octx.Transaction{
-			From:          s.Wallet.Addr,
-			To:            addr,
-			Amount:        amount,
-			Nonce:         bi.Nonce + 1,
-			OU:            ou,
-			Timestamp:     octx.NowTS(),
-			OpType:        "call",
-			EncryptedData: method,
-			Message:       params,
-		}
-		octx.SignTx(tx, s.Wallet.SK, s.Wallet.PubB64)
-		txHash, err := octx.SubmitTx(s.RPC, tx)
-		if err != nil {
-			fmt.Printf("Error: %s\n", err)
-			return
-		}
-		fmt.Printf("Transaction: %s\n", txHash)
-	},
-}
-
-var contractViewCmd = &cobra.Command{
-	Use:   "view",
-	Short: "Call a contract method (read-only)",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		addr, _ := cmd.Flags().GetString("address")
-		method, _ := cmd.Flags().GetString("method")
-		params, _ := cmd.Flags().GetString("params")
-
-		if addr == "" || method == "" {
-			fmt.Println("Error: --address and --method required")
-			return
-		}
-
-		var parsedParams interface{}
-		if params != "" {
-			json.Unmarshal([]byte(params), &parsedParams)
-		}
-		if parsedParams == nil {
-			parsedParams = []interface{}{}
-		}
-
-		r := s.RPC.ContractCallView(addr, method, parsedParams, s.Wallet.Addr)
-		if !r.OK {
-			fmt.Printf("Error: %s\n", r.Error)
-			return
-		}
-		fmt.Println(string(r.Data))
-	},
-}
-
-var contractInfoCmd = &cobra.Command{
-	Use:   "info",
-	Short: "Get contract info",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		addr, _ := cmd.Flags().GetString("address")
-		if addr == "" {
-			fmt.Println("Error: --address required")
-			return
-		}
-
-		r := s.RPC.VMContract(addr)
-		if !r.OK {
-			fmt.Printf("Error: %s\n", r.Error)
-			return
-		}
-		fmt.Println(string(r.Data))
-	},
-}
-
-var contractReceiptCmd = &cobra.Command{
-	Use:   "receipt",
-	Short: "Get contract execution receipt",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		hash, _ := cmd.Flags().GetString("hash")
-		if hash == "" && len(args) > 0 {
-			hash = args[0]
-		}
-		if hash == "" {
-			fmt.Println("Error: --hash required")
-			return
-		}
-
-		r := s.RPC.ContractReceipt(hash)
-		if !r.OK {
-			fmt.Printf("Error: %s\n", r.Error)
-			return
-		}
-		fmt.Println(string(r.Data))
-	},
-}
-
-var contractStorageCmd = &cobra.Command{
-	Use:   "storage",
-	Short: "Read contract storage by key",
-	Run: func(cmd *cobra.Command, args []string) {
-		s := mustSession(cmd)
-		defer s.Close()
-
-		addr, _ := cmd.Flags().GetString("address")
-		key, _ := cmd.Flags().GetString("key")
-		if addr == "" || key == "" {
-			fmt.Println("Error: --address and --key required")
-			return
-		}
-
-		r := s.RPC.ContractStorage(addr, key)
-		if !r.OK {
-			fmt.Printf("Error: %s\n", r.Error)
-			return
-		}
-		m := r.Map()
-		if v, ok := m["value"]; ok && v != nil {
-			fmt.Printf("%v\n", v)
-		} else {
-			fmt.Println("null")
-		}
-	},
-}
-
-func init() {
-	contractCmd.AddCommand(contractCompileCmd)
-	contractCmd.AddCommand(contractCompileAmlCmd)
-	contractCmd.AddCommand(contractAddressCmd)
-	contractCmd.AddCommand(contractDeployCmd)
-	contractCmd.AddCommand(contractVerifyCmd)
-	contractCmd.AddCommand(contractCallCmd)
-	contractCmd.AddCommand(contractViewCmd)
-	contractCmd.AddCommand(contractInfoCmd)
-	contractCmd.AddCommand(contractReceiptCmd)
-	contractCmd.AddCommand(contractStorageCmd)
-
-	for _, c := range []*cobra.Command{
-		contractCompileCmd, contractCompileAmlCmd, contractAddressCmd,
-		contractDeployCmd, contractVerifyCmd, contractCallCmd,
-		contractViewCmd, contractInfoCmd, contractReceiptCmd, contractStorageCmd,
-	} {
-		c.Flags().String("account", "", "Account address")
+		*source = string(data)
+	}
+	if *source == "" {
+		fmt.Println("Error: --source or --file required")
+		return
 	}
 
-	contractCompileCmd.Flags().String("source", "", "Assembly source")
-	contractCompileCmd.Flags().String("file", "", "Source file path")
+	resp, err := s.RPC.CompileAssembly(*source)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+	j, _ := json.MarshalIndent(map[string]interface{}{
+		"bytecode":     resp.Bytecode,
+		"size":         resp.Size,
+		"instructions": resp.Instructions,
+	}, "", "  ")
+	fmt.Println(string(j))
+}
 
-	contractCompileAmlCmd.Flags().String("source", "", "AML source")
-	contractCompileAmlCmd.Flags().String("file", "", "Source file path")
+func runContractCompileAml(args []string) {
+	fs := flag.NewFlagSet("contract compile-aml", flag.ExitOnError)
+	source := fs.String("source", "", "AML source")
+	file := fs.String("file", "", "Source file path")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
 
-	contractAddressCmd.Flags().String("bytecode", "", "Bytecode (base64)")
+	s := mustSession(*account)
+	defer s.Close()
 
-	contractDeployCmd.Flags().String("bytecode", "", "Bytecode (base64)")
-	contractDeployCmd.Flags().String("params", "", "Constructor params")
-	contractDeployCmd.Flags().String("ou", "", "Operation units")
-	contractDeployCmd.MarkFlagRequired("bytecode")
+	if *source == "" && *file != "" {
+		data, err := os.ReadFile(*file)
+		if err != nil {
+			fmt.Printf("Error reading file: %s\n", err)
+			return
+		}
+		*source = string(data)
+	}
+	if *source == "" {
+		fmt.Println("Error: --source or --file required")
+		return
+	}
 
-	contractVerifyCmd.Flags().String("address", "", "Contract address")
-	contractVerifyCmd.Flags().String("source", "", "Source code")
-	contractVerifyCmd.Flags().String("file", "", "Source file path")
+	resp, err := s.RPC.CompileAml(*source)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+	result := map[string]interface{}{
+		"bytecode":     resp.Bytecode,
+		"size":         resp.Size,
+		"instructions": resp.Instructions,
+		"version":      resp.Version,
+	}
+	if resp.ABI != nil {
+		result["abi"] = json.RawMessage(resp.ABI)
+	}
+	j, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(j))
+}
 
-	contractCallCmd.Flags().String("address", "", "Contract address")
-	contractCallCmd.Flags().String("method", "", "Method name")
-	contractCallCmd.Flags().String("params", "", "JSON params array")
-	contractCallCmd.Flags().String("amount", "0", "Amount to send")
-	contractCallCmd.Flags().String("ou", "", "Operation units")
+func runContractAddress(args []string) {
+	fs := flag.NewFlagSet("contract address", flag.ExitOnError)
+	bytecode := fs.String("bytecode", "", "Bytecode (base64)")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
 
-	contractViewCmd.Flags().String("address", "", "Contract address")
-	contractViewCmd.Flags().String("method", "", "Method name")
-	contractViewCmd.Flags().String("params", "", "JSON params array")
+	if *bytecode == "" {
+		fmt.Println("Error: --bytecode required")
+		return
+	}
 
-	contractInfoCmd.Flags().String("address", "", "Contract address")
+	s := mustSession(*account)
+	defer s.Close()
 
-	contractReceiptCmd.Flags().String("hash", "", "Transaction hash")
+	bi := octx.GetNonceBalance(s.RPC, s.Wallet)
+	resp, err := s.RPC.ComputeContractAddress(*bytecode, s.Wallet.Addr, bi.Nonce+1)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+	j, _ := json.MarshalIndent(map[string]interface{}{
+		"address":  resp.Address,
+		"deployer": resp.Deployer,
+		"nonce":    resp.Nonce,
+	}, "", "  ")
+	fmt.Println(string(j))
+}
 
-	contractStorageCmd.Flags().String("address", "", "Contract address")
-	contractStorageCmd.Flags().String("key", "", "Storage key")
+func runContractDeploy(args []string) {
+	fs := flag.NewFlagSet("contract deploy", flag.ExitOnError)
+	bytecode := fs.String("bytecode", "", "Bytecode (base64)")
+	params := fs.String("params", "", "Constructor params")
+	ou := fs.String("ou", "", "Operation units")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
 
-	_ = strconv.Itoa // suppress import
+	if *bytecode == "" {
+		fmt.Println("Error: --bytecode required")
+		return
+	}
+
+	s := mustSession(*account)
+	defer s.Close()
+
+	if *ou == "" {
+		*ou = "50000000"
+	}
+
+	bi := octx.GetNonceBalance(s.RPC, s.Wallet)
+	ar, err := s.RPC.ComputeContractAddress(*bytecode, s.Wallet.Addr, bi.Nonce+1)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+
+	tx := &octx.Transaction{
+		From:          s.Wallet.Addr,
+		To:            ar.Address,
+		Amount:        "0",
+		Nonce:         bi.Nonce + 1,
+		OU:            *ou,
+		Timestamp:     octx.NowTS(),
+		OpType:        "deploy",
+		EncryptedData: *bytecode,
+		Message:       *params,
+	}
+	octx.SignTx(tx, s.Wallet.SK, s.Wallet.PubB64)
+	txHash, err := octx.SubmitTx(s.RPC, tx)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+	fmt.Printf("Contract deployed: %s\n", ar.Address)
+	fmt.Printf("Transaction: %s\n", txHash)
+}
+
+func runContractVerify(args []string) {
+	fs := flag.NewFlagSet("contract verify", flag.ExitOnError)
+	addr := fs.String("address", "", "Contract address")
+	source := fs.String("source", "", "Source code")
+	file := fs.String("file", "", "Source file path")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
+
+	s := mustSession(*account)
+	defer s.Close()
+
+	if *source == "" && *file != "" {
+		data, err := os.ReadFile(*file)
+		if err != nil {
+			fmt.Printf("Error: %s\n", err)
+			return
+		}
+		*source = string(data)
+	}
+	if *addr == "" || *source == "" {
+		fmt.Println("Error: --address and (--source or --file) required")
+		return
+	}
+
+	r := s.RPC.ContractVerify(*addr, *source)
+	if !r.OK {
+		fmt.Printf("Verification failed: %s\n", r.Error)
+		return
+	}
+	fmt.Println("Verification passed")
+	fmt.Println(string(r.Data))
+}
+
+func runContractCall(args []string) {
+	fs := flag.NewFlagSet("contract call", flag.ExitOnError)
+	addr := fs.String("address", "", "Contract address")
+	method := fs.String("method", "", "Method name")
+	params := fs.String("params", "", "JSON params array")
+	amount := fs.String("amount", "0", "Amount to send")
+	ou := fs.String("ou", "", "Operation units")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
+
+	if *addr == "" || *method == "" {
+		fmt.Println("Error: --address and --method required")
+		return
+	}
+
+	s := mustSession(*account)
+	defer s.Close()
+
+	if *amount == "" {
+		*amount = "0"
+	}
+	if *ou == "" {
+		*ou = "1000"
+	}
+	if *params == "" {
+		*params = "[]"
+	}
+
+	bi := octx.GetNonceBalance(s.RPC, s.Wallet)
+	tx := &octx.Transaction{
+		From:          s.Wallet.Addr,
+		To:            *addr,
+		Amount:        *amount,
+		Nonce:         bi.Nonce + 1,
+		OU:            *ou,
+		Timestamp:     octx.NowTS(),
+		OpType:        "call",
+		EncryptedData: *method,
+		Message:       *params,
+	}
+	octx.SignTx(tx, s.Wallet.SK, s.Wallet.PubB64)
+	txHash, err := octx.SubmitTx(s.RPC, tx)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+	fmt.Printf("Transaction: %s\n", txHash)
+}
+
+func runContractView(args []string) {
+	fs := flag.NewFlagSet("contract view", flag.ExitOnError)
+	addr := fs.String("address", "", "Contract address")
+	method := fs.String("method", "", "Method name")
+	params := fs.String("params", "", "JSON params array")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
+
+	if *addr == "" || *method == "" {
+		fmt.Println("Error: --address and --method required")
+		return
+	}
+
+	s := mustSession(*account)
+	defer s.Close()
+
+	var parsedParams interface{}
+	if *params != "" {
+		json.Unmarshal([]byte(*params), &parsedParams)
+	}
+	if parsedParams == nil {
+		parsedParams = []interface{}{}
+	}
+
+	r := s.RPC.ContractCallView(*addr, *method, parsedParams, s.Wallet.Addr)
+	if !r.OK {
+		fmt.Printf("Error: %s\n", r.Error)
+		return
+	}
+	fmt.Println(string(r.Data))
+}
+
+func runContractInfo(args []string) {
+	fs := flag.NewFlagSet("contract info", flag.ExitOnError)
+	addr := fs.String("address", "", "Contract address")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
+
+	if *addr == "" {
+		fmt.Println("Error: --address required")
+		return
+	}
+
+	s := mustSession(*account)
+	defer s.Close()
+
+	r := s.RPC.VMContract(*addr)
+	if !r.OK {
+		fmt.Printf("Error: %s\n", r.Error)
+		return
+	}
+	fmt.Println(string(r.Data))
+}
+
+func runContractReceipt(args []string) {
+	fs := flag.NewFlagSet("contract receipt", flag.ExitOnError)
+	hash := fs.String("hash", "", "Transaction hash")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
+
+	if *hash == "" && fs.NArg() > 0 {
+		*hash = fs.Arg(0)
+	}
+	if *hash == "" {
+		fmt.Println("Error: --hash required")
+		return
+	}
+
+	s := mustSession(*account)
+	defer s.Close()
+
+	r := s.RPC.ContractReceipt(*hash)
+	if !r.OK {
+		fmt.Printf("Error: %s\n", r.Error)
+		return
+	}
+	fmt.Println(string(r.Data))
+}
+
+func runContractStorage(args []string) {
+	fs := flag.NewFlagSet("contract storage", flag.ExitOnError)
+	addr := fs.String("address", "", "Contract address")
+	key := fs.String("key", "", "Storage key")
+	account := fs.String("account", "", "Account address")
+	fs.Parse(args)
+
+	if *addr == "" || *key == "" {
+		fmt.Println("Error: --address and --key required")
+		return
+	}
+
+	s := mustSession(*account)
+	defer s.Close()
+
+	resp, err := s.RPC.ContractStorage(*addr, *key)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return
+	}
+	if resp.Value != nil {
+		fmt.Printf("%v\n", resp.Value)
+	} else {
+		fmt.Println("null")
+	}
 }

@@ -7,15 +7,25 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/protobuffalo/go-octra/internal/config"
 	"github.com/protobuffalo/go-octra/internal/crypto"
 )
 
-const (
-	WalletDir    = "data"
-	WalletFile   = "data/wallet.oct"
-	WalletLegacy = "wallet.json"
-	ManifestFile = "data/accounts.json"
+const WalletLegacy = "wallet.json"
+
+// These are set from config at init time and can be overridden.
+var (
+	WalletDir    = config.DefaultDataDir
+	WalletFile   = filepath.Join(config.DefaultDataDir, "wallet.oct")
+	ManifestFile = filepath.Join(config.DefaultDataDir, "accounts.json")
 )
+
+// ApplyConfig updates wallet paths from the given config.
+func ApplyConfig(c *config.Config) {
+	WalletDir = c.DataDir
+	WalletFile = c.WalletFile()
+	ManifestFile = c.ManifestFile()
+}
 
 type Wallet struct {
 	PrivB64       string   `json:"priv"`
@@ -195,12 +205,12 @@ func LoadWalletEncrypted(path, pin string) (*Wallet, error) {
 	if v, ok := j["rpc"].(string); ok {
 		w.RPCURL = v
 	} else {
-		w.RPCURL = "http://46.101.86.250:8080"
+		w.RPCURL = config.DefaultRPCURL
 	}
 	if v, ok := j["explorer"].(string); ok {
 		w.ExplorerURL = v
 	} else {
-		w.ExplorerURL = "https://octrascan.io"
+		w.ExplorerURL = config.DefaultExplorerURL
 	}
 	if v, ok := j["master_seed"].(string); ok {
 		w.MasterSeedB64 = v
@@ -243,8 +253,8 @@ func CreateWallet(path, pin string) (*Wallet, string, error) {
 	}
 	w.PrivB64 = crypto.Base64Encode(w.SK[:32])
 	w.PubB64 = crypto.Base64Encode(w.PK[:])
-	w.RPCURL = "http://46.101.86.250:8080"
-	w.ExplorerURL = "https://octrascan.io"
+	w.RPCURL = config.DefaultRPCURL
+	w.ExplorerURL = config.DefaultExplorerURL
 	w.MasterSeedB64 = crypto.Base64Encode(seed[:])
 	w.Mnemonic = mnemonic
 	w.HDIndex = 0
@@ -269,8 +279,8 @@ func ImportWalletMnemonic(path, mnemonic, pin string, hdVersion int) (*Wallet, e
 	}
 	w.PrivB64 = crypto.Base64Encode(w.SK[:32])
 	w.PubB64 = crypto.Base64Encode(w.PK[:])
-	w.RPCURL = "http://46.101.86.250:8080"
-	w.ExplorerURL = "https://octrascan.io"
+	w.RPCURL = config.DefaultRPCURL
+	w.ExplorerURL = config.DefaultExplorerURL
 	w.MasterSeedB64 = crypto.Base64Encode(seed[:])
 	w.Mnemonic = mnemonic
 	w.HDIndex = 0
@@ -307,8 +317,8 @@ func ImportWalletPrivkey(path, privB64Raw, pin string) (*Wallet, error) {
 	}
 	w.PrivB64 = crypto.Base64Encode(w.SK[:32])
 	w.PubB64 = crypto.Base64Encode(w.PK[:])
-	w.RPCURL = "http://46.101.86.250:8080"
-	w.ExplorerURL = "https://octrascan.io"
+	w.RPCURL = config.DefaultRPCURL
+	w.ExplorerURL = config.DefaultExplorerURL
 	if err := SaveWalletEncrypted(path, w, pin); err != nil {
 		return nil, err
 	}

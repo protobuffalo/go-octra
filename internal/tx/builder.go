@@ -102,12 +102,11 @@ func SubmitTx(client *rpc.Client, tx *Transaction) (string, error) {
 	if tx.Message != "" {
 		j["message"] = tx.Message
 	}
-	r := client.SubmitTx(j)
-	if !r.OK {
-		return "", fmt.Errorf("%s", r.Error)
+	resp, err := client.SubmitTx(j)
+	if err != nil {
+		return "", err
 	}
-	m := r.Map()
-	return rpc.MapString(m, "tx_hash", ""), nil
+	return resp.TxHash, nil
 }
 
 type BalanceInfo struct {
@@ -116,42 +115,19 @@ type BalanceInfo struct {
 }
 
 func GetNonceBalance(client *rpc.Client, w *wallet.Wallet) BalanceInfo {
-	r := client.GetBalance(w.Addr)
-	if !r.OK {
+	resp, err := client.GetBalance(w.Addr)
+	if err != nil {
 		return BalanceInfo{0, "0"}
 	}
-	m := r.Map()
-	nonce := rpc.MapInt(m, "pending_nonce", rpc.MapInt(m, "nonce", 0))
-	raw := "0"
-	if v, ok := m["balance_raw"]; ok {
-		switch bv := v.(type) {
-		case string:
-			raw = bv
-		case float64:
-			raw = strconv.FormatInt(int64(bv), 10)
-		}
-	} else if v, ok := m["balance"]; ok {
-		switch bv := v.(type) {
-		case float64:
-			raw = strconv.FormatInt(int64(bv*1000000), 10)
-		case string:
-			raw = bv
-		}
-	}
+	nonce := resp.EffectiveNonce()
+	raw := resp.EffectiveBalanceRaw()
 
 	// Check staging for pending nonce
-	pr := client.StagingView()
-	if pr.OK {
-		var staging struct {
-			Transactions []map[string]interface{} `json:"transactions"`
-		}
-		pr.Unmarshal(&staging)
+	staging, err := client.StagingView()
+	if err == nil {
 		for _, stx := range staging.Transactions {
-			if rpc.MapString(stx, "from", "") == w.Addr {
-				pn := rpc.MapInt(stx, "nonce", 0)
-				if pn > nonce {
-					nonce = pn
-				}
+			if stx.From == w.Addr && stx.Nonce > nonce {
+				nonce = stx.Nonce
 			}
 		}
 	}
